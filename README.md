@@ -15,7 +15,7 @@ You must setup adb over wifi at least once before this will work. See the ADB pa
 ## Installation
 This isn't ready for Powershell Gallery yet, so the best way would be to run:  
 ```powershell
-git clone [URL] "${env:UserProfile}\Documents\Powershell\Modules\adb-powershell"
+git clone https://github.com/spedrickson/adb-powershell.git "${env:UserProfile}\Documents\Powershell\Modules\adb-powershell"
 ```
 This will clone the repo into the module directory for the current user. Restart Powershell to automatically load. 
 
