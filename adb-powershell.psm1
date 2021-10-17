@@ -19,6 +19,7 @@
 $cfgFile = Join-Path -Path $PSScriptRoot -ChildPath "adb_defaults.cfg"
 function Send-AdbFile {
     [CmdletBinding()]
+    [alias("saf")]
     param(
         # The source file(s) that should be written to the adb device
         [Object[]][Parameter(Mandatory, ValueFromPipeline, Position=0)]
@@ -161,3 +162,5 @@ function Get-Cfg {
     Write-Verbose "${key}: ${$script:config.$key}"
     return $script:config."$key"
 }
+
+Export-ModuleMember -Function Send-AdbFile, Get-AdbDeviceConnectionStatus, Confirm-AdbDeviceConnected -Alias saf
