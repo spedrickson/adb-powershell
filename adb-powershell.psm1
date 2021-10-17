@@ -1,4 +1,3 @@
-Import-Module Convert-Timespan
 <#
     .Synopsis
     Sends the specified file(s) to a device, using adb over wifi
@@ -108,7 +107,7 @@ function Send-AdbFile {
         Write-Host -NoNewLine "Finished, $processed processed"
         if ($successful) {Write-Host -NoNewLine -ForegroundColor Green " $successful successful"}
         if ($failed) {Write-Host -NoNewLine -ForegroundColor Red " $failed failed"}
-        Write-Host (" in {0}" -f (Convert-Timespan $startTime))
+        Write-Host (" in {0}" -f $startTime.Elapsed
     }
 }
 
