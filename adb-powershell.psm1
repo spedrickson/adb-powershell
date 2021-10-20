@@ -18,7 +18,7 @@
 #>
 $cfgFile = Join-Path -Path $PSScriptRoot -ChildPath "adb_defaults.cfg"
 function Send-AdbFile {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     [alias("saf")]
     param(
         # The source file(s) that should be written to the adb device
@@ -68,6 +68,8 @@ function Send-AdbFile {
 
     process {
         $processed++
+        if (-not ($PSCmdlet.ShouldProcess("$Source", "PUSH"))) {return}
+
         $out = [PSCustomObject]@{
             Source = $Source
             RemotePath = $null
@@ -96,8 +98,8 @@ function Send-AdbFile {
             $out.Failed = $true
             $out.ErrorInfo = $err
         }
+
         Write-Verbose ("push time:     {0} ms" -f $timer.ElapsedMilliseconds); $timer.Restart()
- 
         return $out
     }
 
@@ -108,7 +110,7 @@ function Send-AdbFile {
         Write-Host -NoNewLine "Finished, $processed processed"
         if ($successful) {Write-Host -NoNewLine -ForegroundColor Green " $successful successful"}
         if ($failed) {Write-Host -NoNewLine -ForegroundColor Red " $failed failed"}
-        Write-Host (" in {0}" -f $startTime.Elapsed
+        Write-Host (" in {0}" -f $startTime.Elapsed)
     }
 }
 
