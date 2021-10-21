@@ -28,14 +28,18 @@ function Send-AdbFile {
         # The directory on the adb device where source file(s) should be written
         #   e.g. /storage/emulated/0/Download
         [String][Parameter(Position=1)]
+        [ValidateScript({Test-Path -IsValid $_}, ErrorMessage = "{0} is not a valid path")]
+        [ArgumentCompleter({Get-Cfg Destination})]
         $Destination = (Get-Cfg Destination),
 
         # The IP address of the adb device that should be written to
         [IPAddress]
+        [ArgumentCompleter({Get-Cfg IPAddress})]
         $IPAddress = (Get-Cfg IPAddress),
 
         # The port of the adb device that should be written to
         [Int][ValidateRange("Positive")]
+        [ArgumentCompleter({Get-Cfg Port})]
         $Port = (Get-Cfg Port),
 
         # Disable the summary of items (successful/failed count, exec time) after processing is finished
@@ -44,83 +48,55 @@ function Send-AdbFile {
     )
 
     begin {
-        $startTime = [System.Diagnostics.Stopwatch]::StartNew()
-        $timer = [System.Diagnostics.Stopwatch]::StartNew()
-        $successful = 0
-        $failed = 0
-        $processed = 0
-        $skipped = 0
-        Write-Verbose "IP:           $IPAddress"
-        Write-Verbose "Port:         $Port"
-        Write-Verbose "destination:  $destination"
-        
-        # ensure `adb` is available as a command
-        if (-not (Get-Command "adb" -ErrorAction SilentlyContinue)) {
-            Write-Error "adb not available in PATH, see README for install instructions"; break
-        }
-
         # ensure proper device connection before running
         if (-not (Confirm-AdbDeviceConnected -IP $IPAddress -port $Port)) {
             Write-Error "Could not connect to adb device ${IPAddress}:$Port"; break
         }
-        Write-Verbose ("setup time:   {0} ms" -f $startTime.ElapsedMilliseconds)
+
+        Write-Verbose "adb device:   ${IPAddress}:$Port"
+        Write-Verbose "destination:  $destination"
+
+        $startTime = [System.Diagnostics.Stopwatch]::StartNew()
+        $successCount, $failCount = 0, 0
     }
 
     process {
-        $processed++
-        if (-not ($PSCmdlet.ShouldProcess("$Source", "PUSH"))) {return}
-
-        $out = [PSCustomObject]@{
-            Source = $Source
-            RemotePath = $null
-            ErrorInfo = $null
-            Succeeded = $false
-            Skipped = $false
-            Failed = $false
-        }
-        Write-Verbose "processing:   $Source"
-        # ensure file exists before push
-        if (-not (Test-Path -Path $Source )) {
-            $skipped++
-            $out.Skipped = $true
-            return $out
-        }
+        $remoteFile = "$Destination/$(Split-Path -Leaf $Source)"
+        if (-not ($PSCmdlet.ShouldProcess("PUSH", "$Source -> $remoteFile"))) {return}
         
-        # push file to device
-        $timer.Restart()
-        $output = adb push "$Source" "$Destination" 2> $err
-        if ($output | Confirm-AdbPushSuccessful) {
-            $successful++
-            $out.Succeeded = $true
-            $out.RemotePath = "$Destination/{0}" -f $Source | Split-Path -Leaf
-        } else {
-            $failed++
-            $out.Failed = $true
-            $out.ErrorInfo = $err
-        }
-
-        Write-Verbose ("push time:     {0} ms" -f $timer.ElapsedMilliseconds); $timer.Restart()
-        return $out
+        # push file to adb device and record results
+        $result = [Result]::new($Source, $remoteFile)
+        Write-Verbose "pushing:       $Source -> $Destination"
+        # TODO: add progress for long-running push
+        $err = $($succeeded = adb push "$Source" "$Destination" | Confirm-AdbPushSuccessful) 2>&1
+        $result.Update($succeeded, $err)
+        $null = $succeeded ? $successCount++ : $failCount++        
+        return $result
     }
 
     end {
-        # print summary information (execution time, successful, )
-        if ($NoSummary) {return}
-        if (-not $processed) {return}
-        Write-Host -NoNewLine "Finished, $processed processed"
-        if ($successful) {Write-Host -NoNewLine -ForegroundColor Green " $successful successful"}
-        if ($failed) {Write-Host -NoNewLine -ForegroundColor Red " $failed failed"}
-        Write-Host (" in {0}" -f $startTime.Elapsed)
+        # print summary information (execution time, successCount, )
+        if ($NoSummary -or $processCount -eq 0) {return}
+        Write-Host -NoNewLine "Finished:"
+        Write-Host -NoNewLine " $successCount succeeded" -ForegroundColor ($successCount ? "Green" : "DarkGray")
+        Write-Host -NoNewLine " $failCount failed" -ForegroundColor ($failCount ? "Red" : "DarkGray")
+        Write-Host " in $($startTime.Elapsed)"
     }
 }
 
-# parses the output of a push to see if it was successful
-# returns true if the push was successful, false otherwise
-function Confirm-AdbPushSuccessful {
-    Param([Parameter(ValueFromPipeline)]$data)
-    Write-Debug $data
+# parses the output of a push to see if it was successCou
+# returns true if the push was successCou, false otherwise
+function Confirm-AdbPushSuccessful([Parameter(ValueFromPipeline)]$data) {
     $errored = $data.ToLower().Contains('adb: error:')
+    if ($errored) {Write-Error $data}
     return -not $errored
+}
+
+# returns true if adb is available and executable, false otherwise
+function Confirm-AdbAvailable {
+    $result = Get-Command "adb" -ErrorAction SilentlyContinue
+    if ($result) {Write-Verbose "adb:          $($result.Source)"}
+    return [bool]$result
 }
 
 
@@ -128,10 +104,10 @@ function Confirm-AdbPushSuccessful {
 # returns true if adb device is connected, false otherwise
 function Confirm-AdbDeviceConnected {
     [CmdletBinding()]
-    Param(
-        [IPAddress]$IPAddress = "192.168.1.30",
-        [int]$Port = "5555"
-    )
+    Param([IPAddress]$IPAddress = (Get-Cfg IPAddress), [int]$Port = (Get-Cfg Port))
+
+    # confirm adb exists before checking connection
+    if (-not (Confirm-AdbAvailable)) {Write-Error "adb not available in PATH, see README for install instructions"; return $false}
     if (Get-AdbDeviceConnectionStatus -IP $IPAddress -Port $Port) {return $true}
     Write-Verbose "adb was not connected, attempting new connection to ${IPAddress}:$Port"
     $null = adb tcpip $Port 2> $null
@@ -143,26 +119,41 @@ function Confirm-AdbDeviceConnected {
 # returns true if adb device is connected, false otherwise
 function Get-AdbDeviceConnectionStatus {
     [CmdletBinding()]
-    Param(
-        [IPAddress]$IPAddress = "192.168.1.30",
-        [int]$Port = "5555"
-    )
+    Param([IPAddress]$IPAddress = (Get-Cfg IPAddress), [int]$Port = (Get-Cfg Port))
     Write-Verbose "checking adb connection status for ${IPAddress}:$Port"
+
     $devices = adb devices 2> $null
     $connected = $devices | Select-Object -Skip 1 | Where-Object {$_.Contains("${IPAddress}:$Port")}
     return [bool]$connected
 }
 
 # caches config data in script-level variable before returning key's value
-function Get-Cfg {
-    param($key)
+function Get-Cfg($key) {
     if (-not ($script:config)) {
         Write-Verbose "loading config data from $cfgFile"
-        $data = (Get-Content $cfgFile) -join "`n"
-        $script:config = ConvertFrom-StringData $data
+        $script:config = ConvertFrom-StringData ((Get-Content $cfgFile) -join "`n")
     }
     Write-Verbose "${key}: ${$script:config.$key}"
     return $script:config."$key"
 }
 
-Export-ModuleMember -Function Send-AdbFile, Get-AdbDeviceConnectionStatus, Confirm-AdbDeviceConnected -Alias saf
+class Result {
+    [string]$Source
+    [string]$RemotePath
+    [string]$ErrorInfo = $null
+    [bool]$Succeeded = $false
+    [bool]$Failed = $false
+
+    Result ($Source, $Destination) {
+       $this.Source = $Source
+       $this.RemotePath = $Destination
+    }
+
+    Update([bool]$success, $err = $null) {
+        $this.Succeeded = $success
+        $this.Failed = -not $success
+        $this.ErrorInfo = $err
+    }
+}
+
+Export-ModuleMember -Function * -Alias saf

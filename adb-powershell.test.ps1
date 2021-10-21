@@ -45,7 +45,6 @@ Describe 'ADB-Suite' {
         It 'should push files to an adb device successfully' {
             $result = Send-AdbFile -Source "$testFile" -Destination "$remoteDir" -NoSummary
             $result.Succeeded | Should -BeTrue
-            $result.Skipped | Should -BeFalse
             $result.Failed | Should -BeFalse
             adb shell rm "$remoteDir/$testFileLeaf" 2> $null
         }
@@ -53,7 +52,6 @@ Describe 'ADB-Suite' {
         It 'should send accurate data to the adb device' {
             $result = Send-AdbFile -Source "$testFile" -Destination "$remoteDir" -NoSummary
             $result.Succeeded | Should -BeTrue
-            $result.Skipped | Should -BeFalse
             $result.Failed | Should -BeFalse
             adb pull "$remoteDir/$testFileLeaf" "$testRead"
             (Get-FileHash "$testFile").hash -eq (Get-FileHash "$testRead").hash | Should -Be $true
@@ -63,7 +61,6 @@ Describe 'ADB-Suite' {
         It 'should support the first usage example' {
             $result = Send-AdbFile $testFile -NoSummary
             $result.Succeeded | Should -BeTrue
-            $result.Skipped | Should -BeFalse
             $result.Failed | Should -BeFalse
             adb shell rm "$remoteDir/$testFileLeaf" 2> $null
         }
@@ -71,7 +68,6 @@ Describe 'ADB-Suite' {
         It 'should support the second usage example' {
             $result = Send-AdbFile "$testFile" "$remoteDir" -NoSummary
             $result.Succeeded | Should -BeTrue
-            $result.Skipped | Should -BeFalse
             $result.Failed | Should -BeFalse
             adb shell rm "$remoteDir/$testFileLeaf" 2> $null
         }
@@ -79,15 +75,13 @@ Describe 'ADB-Suite' {
         It 'should support the third usage example' {
             $result = Get-ChildItem $testFile | Send-AdbFile -d "$remoteDir" -NoSummary
             $result.Succeeded | Should -BeTrue
-            $result.Skipped | Should -BeFalse
             $result.Failed | Should -BeFalse
             adb shell rm "$remoteDir/$testFileLeaf" 2> $null
         }
 
-        It 'should mark non-existent local files as skipped' {
-            $result = Send-AdbFile -Source "./non_existent_file" -Destination $remote
-            $result.Skipped | Should -BeTrue
-            $result.Failed | Should -BeFalse
+        It 'should mark non-existent local files as failed' {
+            $result = Send-AdbFile -Source "./non_existent_file" -Destination $remoteDir -NoSummary
+            $result.Failed | Should -BeTrue
             $result.Succeeded | Should -BeFalse
         }
     }
