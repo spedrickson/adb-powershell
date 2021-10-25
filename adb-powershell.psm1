@@ -22,7 +22,7 @@ function Send-AdbFile {
     [alias("saf")]
     param(
         # The source file(s) that should be written to the adb device
-        [Object[]][Parameter(Mandatory, ValueFromPipeline, Position=0)]
+        [Object][Parameter(Mandatory, ValueFromPipeline, Position=0)]
         $Source,
 
         # The directory on the adb device where source file(s) should be written
@@ -58,24 +58,38 @@ function Send-AdbFile {
 
         $startTime = [System.Diagnostics.Stopwatch]::StartNew()
         $successCount, $failCount = 0, 0
+
+        # enable rwx trace for adb for progress tracking
+        $env:ADB_TRACE = "rwx"
     }
 
     process {
+        # support -Confirm and -WhatIf
         $remoteFile = "$Destination/$(Split-Path -Leaf $Source)"
         if (-not ($PSCmdlet.ShouldProcess("PUSH", "$Source -> $remoteFile"))) {return}
         
-        # push file to adb device and record results
+        # verify file exists before attemping push
         $result = [Result]::new($Source, $remoteFile)
-        Write-Verbose "pushing:       $Source -> $Destination"
-        # TODO: add progress for long-running push
-        $err = $($succeeded = adb push "$Source" "$Destination" | Confirm-AdbPushSuccessful) 2>&1
-        $result.Update($succeeded, $err)
-        $null = $succeeded ? $successCount++ : $failCount++        
+        if (-not ($file = Get-Item -LiteralPath $Source -ErrorAction "SilentlyContinue")) {
+            $result.ErrorInfo = "file does not exist: $Source"
+            return $result
+        }
+
+        # start push with progress monitoring
+        try {
+            $result.Succeeded = adb push "$Source" "$Destination" 2>&1
+            | Write-AdbPushProgress -File $File
+            | Confirm-AdbPushSuccessful
+        } catch {
+            $result.ErrorInfo = $_
+        }
+        $result.Succeeded ? $successCount++ : $failCount++ > $null
         return $result
     }
 
     end {
-        # print summary information (execution time, successCount, )
+        $env:ADB_TRACE = ""
+        # print summary information (execution time, successful, failed)
         if ($NoSummary -or $processCount -eq 0) {return}
         Write-Host -NoNewLine "Finished:"
         Write-Host -NoNewLine " $successCount succeeded" -ForegroundColor ($successCount ? "Green" : "DarkGray")
@@ -84,12 +98,67 @@ function Send-AdbFile {
     }
 }
 
-# parses the output of a push to see if it was successCou
-# returns true if the push was successCou, false otherwise
+# parses the output of a push to see if it was successful
+# returns true if the push was successful, false otherwise
 function Confirm-AdbPushSuccessful([Parameter(ValueFromPipeline)]$data) {
+    if ([string]::IsNullOrWhiteSpace($data)) {return $false}
     $errored = $data.ToLower().Contains('adb: error:')
     if ($errored) {Write-Error $data}
     return -not $errored
+}
+
+# receives adb debug output and parses it into progress information
+# the environment variable `ADB_TRACE` must be set to "wrx" or "all" before running adb
+function Write-AdbPushProgress {
+    Param(
+        [String][Parameter(Mandatory, ValueFromPipeline)]
+        $inputobject,
+
+        [System.IO.FileInfo]
+        $File
+    )
+    begin {
+        $sum, $lastSum, $runningAverage = 0, 0, 0
+        $writeDelayMS = 250
+        $averageSamples = 5
+        $size = $File.Length
+        $Progress = @{
+            PercentComplete = 0
+            Status = $File.FullName
+            Activity = "Pushing..."
+            Id = 0
+        }
+        $writeTime = [System.Diagnostics.Stopwatch]::StartNew()
+    }
+
+    process {
+        # force errors to throw instead of continuing
+        if ($inputobject.StartsWith("adb: error:")) {
+            throw "$inputobject"
+        # parse push data line
+        } elseif ($inputobject.Contains("writex") -and $inputobject.Contains("DATA")) {
+            if ($inputobject -match "writex:.*len=(\d+).* DATA") {
+                $sum += [int]$Matches[1]
+                
+                # only write-progress every 1/4 second
+                if ($writeTime.ElapsedMilliseconds -lt $writeDelayMS) {return}
+                $writeTime.Restart()
+                
+                # calculate running average before every progress write
+                $pushedPerSecond = ($sum - $lastSum) * (1000 / $writeDelayMS)
+                $lastSum = $sum
+                $runningAverage = ($runningAverage * ($averageSamples - 1) + $pushedPerSecond) / $averageSamples
+                $Progress.PercentComplete = ($sum/$size) * 100
+                $secondsRemaining = ($size - $sum) / $runningAverage
+                $Progress.Status = "[{0:00}%] [~{1:00.00}MB/s] $File.FullName" -f $Progress.PercentComplete, ($runningAverage / 1MB)
+                Write-Progress @Progress -SecondsRemaining $secondsRemaining
+            }
+
+        # pass anything that isn't an error or debug message down the pipeline
+        } elseif (-not ($inputobject.StartsWith("adb"))) {
+            $inputobject
+        } 
+    }
 }
 
 # returns true if adb is available and executable, false otherwise
@@ -140,19 +209,12 @@ function Get-Cfg($key) {
 class Result {
     [string]$Source
     [string]$RemotePath
-    [string]$ErrorInfo = $null
     [bool]$Succeeded = $false
-    [bool]$Failed = $false
+    [string]$ErrorInfo = $null
 
     Result ($Source, $Destination) {
        $this.Source = $Source
        $this.RemotePath = $Destination
-    }
-
-    Update([bool]$success, $err = $null) {
-        $this.Succeeded = $success
-        $this.Failed = -not $success
-        $this.ErrorInfo = $err
     }
 }
 
